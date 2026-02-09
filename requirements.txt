@@ -1,5 +1,0 @@
-flask==3.1.0
-flask-cors==5.0.1
-numpy>=1.24.0
-AhpAnpLib>=2.3.17
-gunicorn==23.0.0
