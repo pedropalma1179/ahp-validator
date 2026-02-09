@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
 
-CMD gunicorn app:app --bind 0.0.0.0:${PORT:-5000}
+CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-5000}"]
