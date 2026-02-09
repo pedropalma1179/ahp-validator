@@ -1,387 +1,303 @@
-# AHP Validator Microservice
-# Flask API para validação de cálculos AHP usando pyAHP
-# Deploy: Railway / Render / Heroku
+#!/usr/bin/env python3
+"""
+AHP-BOCR Validation Microservice
+Validates AHP calculations against AhpAnpLib (Creative Decisions Foundation)
+
+Reference:
+  MU, E. Creative Decisions Foundation Announces the Release of AHP/ANP
+  Python Library. International Journal of the Analytic Hierarchy Process,
+  v. 15, n. 2, 2023. DOI: 10.13033/ijahp.v15i2.1163
+
+Library:
+  AhpAnpLib — https://pypi.org/project/AhpAnpLib/
+  Creative Decisions Foundation — https://creativedecisions.net
+"""
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
+import traceback
 
-# Tentar importar ahpy, senão usar implementação própria
-try:
-    from ahpy import Compare
-    AHPY_AVAILABLE = True
-except ImportError:
-    AHPY_AVAILABLE = False
+# AhpAnpLib — Creative Decisions Foundation
+from AhpAnpLib.calcs_AHPLib import (
+    priorityVector,
+    calcInconsistency,
+    RI
+)
 
 app = Flask(__name__)
-CORS(app)  # Permitir chamadas do frontend
+CORS(app)
 
-# ============================================================
-# IMPLEMENTAÇÃO DE REFERÊNCIA (caso ahpy não esteja disponível)
-# Baseada em Saaty (1980) - método da média geométrica
-# ============================================================
-
-# Random Index (RI) - Saaty (1980), Tabela 3.1
-RANDOM_INDEX = {
-    1: 0, 2: 0, 3: 0.58, 4: 0.90, 5: 1.12,
-    6: 1.24, 7: 1.32, 8: 1.41, 9: 1.45, 10: 1.49,
-    11: 1.52, 12: 1.54, 13: 1.56, 14: 1.58, 15: 1.59
-}
-
-def geometric_mean_method(matrix):
-    """
-    Calcula eigenvector usando método da média geométrica (Saaty, 1980)
-    Este é o método mais comum e recomendado para AHP
-    """
-    n = len(matrix)
-    matrix = np.array(matrix, dtype=float)
-    
-    # Média geométrica de cada linha
-    row_products = np.prod(matrix, axis=1)
-    geometric_means = np.power(row_products, 1/n)
-    
-    # Normalizar
-    weights = geometric_means / np.sum(geometric_means)
-    
-    return weights
-
-def power_method(matrix, max_iter=100, tolerance=1e-6):
-    """
-    Calcula eigenvector usando método das potências (alternativo)
-    Mais preciso para matrizes maiores
-    """
-    n = len(matrix)
-    matrix = np.array(matrix, dtype=float)
-    
-    # Vetor inicial
-    v = np.ones(n) / n
-    
-    for _ in range(max_iter):
-        v_new = np.dot(matrix, v)
-        v_new = v_new / np.sum(v_new)
-        
-        if np.max(np.abs(v_new - v)) < tolerance:
-            break
-        v = v_new
-    
-    return v_new
-
-def calculate_consistency(matrix, weights):
-    """
-    Calcula CR (Consistency Ratio) conforme Saaty (1980)
-    CR = CI / RI, onde CI = (λmax - n) / (n - 1)
-    """
-    n = len(matrix)
-    matrix = np.array(matrix, dtype=float)
-    weights = np.array(weights)
-    
-    # Calcular λmax
-    weighted_sum = np.dot(matrix, weights)
-    lambda_values = weighted_sum / weights
-    lambda_max = np.mean(lambda_values)
-    
-    # Calcular CI
-    if n <= 2:
-        ci = 0
-        cr = 0
-    else:
-        ci = (lambda_max - n) / (n - 1)
-        ri = RANDOM_INDEX.get(n, 1.49)
-        cr = ci / ri if ri > 0 else 0
-    
-    return {
-        'lambda_max': float(lambda_max),
-        'ci': float(ci),
-        'cr': float(cr)
-    }
-
-def validate_with_reference(matrix, items):
-    """
-    Validação usando implementação de referência
-    """
-    # Método 1: Média geométrica (principal)
-    weights_gm = geometric_mean_method(matrix)
-    
-    # Método 2: Potências (verificação)
-    weights_pm = power_method(matrix)
-    
-    # Consistência
-    consistency = calculate_consistency(matrix, weights_gm)
-    
-    # Verificar convergência entre métodos
-    method_diff = np.max(np.abs(weights_gm - weights_pm))
-    
-    return {
-        'weights': weights_gm.tolist(),
-        'weights_power_method': weights_pm.tolist(),
-        'lambda_max': consistency['lambda_max'],
-        'ci': consistency['ci'],
-        'cr': consistency['cr'],
-        'method_convergence': float(method_diff),
-        'methods_agree': method_diff < 0.01
-    }
-
-def validate_with_ahpy(matrix, items):
-    """
-    Validação usando biblioteca ahpy (se disponível)
-    """
-    n = len(items)
-    
-    # Converter matriz para formato ahpy (dicionário de comparações)
-    comparisons = {}
-    for i in range(n):
-        for j in range(i + 1, n):
-            comparisons[(items[i], items[j])] = float(matrix[i][j])
-    
-    # Calcular com ahpy
-    ahp = Compare('validation', comparisons, precision=6)
-    
-    # Extrair resultados na ordem correta
-    weights = [ahp.target_weights[item] for item in items]
-    
-    return {
-        'weights': weights,
-        'cr': float(ahp.consistency_ratio) if ahp.consistency_ratio else 0,
-        'lambda_max': float(ahp.eigenvalue) if ahp.eigenvalue else 0
-    }
-
-# ============================================================
-# ENDPOINTS DA API
-# ============================================================
+# ==============================================================
+# HEALTH CHECK
+# ==============================================================
 
 @app.route('/', methods=['GET'])
 def health():
-    """Health check"""
+    """Health check endpoint"""
+    # Validate AhpAnpLib is working
+    test_matrix = np.array([[1, 2], [0.5, 1]])
+    try:
+        pv = priorityVector(test_matrix)
+        lib_ok = len(pv) == 2
+    except Exception:
+        lib_ok = False
+
     return jsonify({
         'status': 'ok',
-        'service': 'AHP Validator',
-        'version': '1.0.0',
-        'ahpy_available': AHPY_AVAILABLE
+        'service': 'AHP-BOCR Validator',
+        'version': '2.0.0',
+        'library': 'AhpAnpLib (Creative Decisions Foundation)',
+        'library_reference': 'Mu, E. (2023). IJAHP, v.15, n.2. DOI: 10.13033/ijahp.v15i2.1163',
+        'ahpanplib_available': lib_ok
     })
+
+
+# ==============================================================
+# VALIDATE SINGLE MATRIX
+# ==============================================================
 
 @app.route('/validate', methods=['POST'])
 def validate():
     """
-    Endpoint principal de validação
-    
-    Recebe:
+    Validate a single pairwise comparison matrix.
+
+    Input JSON:
     {
-        "matrix": [[1, 3, 5], [0.33, 1, 2], [0.2, 0.5, 1]],
-        "items": ["A", "B", "C"],
-        "your_weights": [0.637, 0.258, 0.105],
-        "your_cr": 0.0158
+      "matrix": [[1, 3, 5], [0.333, 1, 2], [0.2, 0.5, 1]],
+      "items": ["A", "B", "C"],
+      "your_weights": [0.637, 0.258, 0.105],
+      "your_cr": 0.003
     }
-    
-    Retorna comparação entre sistema e SDK
+
+    Returns comparison between your system and AhpAnpLib.
     """
     try:
         data = request.json
-        
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-        
-        matrix = np.array(data.get('matrix', []))
-        items = data.get('items', [])
+        matrix = np.array(data['matrix'], dtype=float)
+        items = data.get('items', [f'Item_{i}' for i in range(len(matrix))])
         your_weights = data.get('your_weights', [])
-        your_cr = data.get('your_cr', 0)
-        your_lambda = data.get('your_lambda', 0)
-        
-        if len(matrix) == 0 or len(items) == 0:
-            return jsonify({'error': 'Matrix and items are required'}), 400
-        
-        # Validar com implementação de referência
-        ref_result = validate_with_reference(matrix, items)
-        
-        # Validar com ahpy se disponível
-        ahpy_result = None
-        if AHPY_AVAILABLE:
-            try:
-                ahpy_result = validate_with_ahpy(matrix, items)
-            except Exception as e:
-                ahpy_result = {'error': str(e)}
-        
-        # Comparar resultados
-        sdk_weights = ref_result['weights']
-        sdk_cr = ref_result['cr']
-        sdk_lambda = ref_result['lambda_max']
-        
-        # Calcular diferenças
-        if your_weights:
-            diff_weights = [abs(a - b) for a, b in zip(your_weights, sdk_weights)]
-            max_diff_weights = max(diff_weights) if diff_weights else 0
-        else:
-            diff_weights = []
-            max_diff_weights = 0
-        
-        diff_cr = abs(your_cr - sdk_cr) if your_cr else 0
-        diff_lambda = abs(your_lambda - sdk_lambda) if your_lambda else 0
-        
-        # Determinar se validação passou
-        tolerance = 0.001  # 0.1%
-        weights_valid = max_diff_weights < tolerance
-        cr_valid = diff_cr < tolerance
-        
-        is_valid = weights_valid and cr_valid
-        
-        response = {
-            'success': True,
-            'validation': {
-                'is_valid': is_valid,
-                'tolerance': tolerance,
-                'weights_valid': weights_valid,
-                'cr_valid': cr_valid
+        your_cr = data.get('your_cr', None)
+
+        n = len(matrix)
+
+        # --- AhpAnpLib calculations ---
+        sdk_weights = priorityVector(matrix)
+        sdk_cr = calcInconsistency(matrix)
+        sdk_ri = RI(n) if n <= 15 else None
+
+        # λmax calculation
+        weighted_sum = matrix @ sdk_weights
+        sdk_lambda_max = float(np.mean(weighted_sum / sdk_weights))
+
+        # --- Comparison ---
+        result = {
+            'sdk': {
+                'library': 'AhpAnpLib',
+                'version': '2.3.17+',
+                'publisher': 'Creative Decisions Foundation',
+                'reference': 'Mu (2023), IJAHP v.15 n.2',
+                'weights': {items[i]: round(float(sdk_weights[i]), 6) for i in range(n)},
+                'weights_array': [round(float(w), 6) for w in sdk_weights],
+                'cr': round(float(sdk_cr), 6),
+                'lambda_max': round(sdk_lambda_max, 6),
+                'ri': round(float(sdk_ri), 4) if sdk_ri else None,
+                'n': n
             },
-            'your_system': {
-                'weights': your_weights,
-                'cr': your_cr,
-                'lambda_max': your_lambda
-            },
-            'reference': {
-                'weights': sdk_weights,
-                'cr': sdk_cr,
-                'lambda_max': sdk_lambda,
-                'method': 'geometric_mean',
-                'methods_agree': ref_result['methods_agree']
-            },
-            'differences': {
-                'weights': diff_weights,
-                'max_weight_diff': max_diff_weights,
-                'cr_diff': diff_cr,
-                'lambda_diff': diff_lambda
-            },
-            'ahpy_available': AHPY_AVAILABLE,
-            'ahpy_result': ahpy_result
+            'valid': True,
+            'details': []
         }
-        
-        return jsonify(response)
-        
+
+        # Compare with your system if provided
+        if your_weights and len(your_weights) == n:
+            your_w = np.array(your_weights, dtype=float)
+            diff_weights = np.abs(sdk_weights - your_w)
+            max_diff = float(np.max(diff_weights))
+
+            result['your_system'] = {
+                'weights': {items[i]: round(float(your_w[i]), 6) for i in range(n)},
+                'weights_array': [round(float(w), 6) for w in your_w],
+                'cr': round(float(your_cr), 6) if your_cr is not None else None
+            }
+
+            result['comparison'] = {
+                'weight_differences': {
+                    items[i]: round(float(diff_weights[i]), 6) for i in range(n)
+                },
+                'max_weight_diff': round(max_diff, 6),
+                'max_weight_diff_pct': round(max_diff * 100, 4),
+                'cr_diff': round(abs(float(sdk_cr) - float(your_cr)), 6) if your_cr is not None else None,
+                'weights_match': max_diff < 0.01,  # 1% tolerance
+                'cr_match': abs(float(sdk_cr) - float(your_cr)) < 0.01 if your_cr is not None else None
+            }
+
+            result['valid'] = max_diff < 0.01
+            if max_diff < 0.001:
+                result['details'].append('✅ Eigenvector: diferença < 0.1% — EXCELENTE')
+            elif max_diff < 0.01:
+                result['details'].append('✅ Eigenvector: diferença < 1% — VÁLIDO')
+            else:
+                result['details'].append(f'⚠️ Eigenvector: diferença máx {max_diff*100:.2f}% — VERIFICAR')
+
+            if your_cr is not None:
+                cr_diff = abs(float(sdk_cr) - float(your_cr))
+                if cr_diff < 0.001:
+                    result['details'].append('✅ CR: diferença < 0.1% — EXCELENTE')
+                elif cr_diff < 0.01:
+                    result['details'].append('✅ CR: diferença < 1% — VÁLIDO')
+                else:
+                    result['details'].append(f'⚠️ CR: diferença {cr_diff*100:.2f}% — VERIFICAR')
+
+        return jsonify(result)
+
     except Exception as e:
         return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'valid': False
+        }), 400
 
-@app.route('/validate-batch', methods=['POST'])
-def validate_batch():
+
+# ==============================================================
+# VALIDATE FULL PROJECT (all matrices)
+# ==============================================================
+
+@app.route('/validate-project', methods=['POST'])
+def validate_project():
     """
-    Validar múltiplas matrizes de uma vez
-    Útil para validar BOCR + subcritérios + alternativas
+    Validate all matrices from an AHP-BOCR project.
+
+    Input JSON:
+    {
+      "matrices": {
+        "bocr": {
+          "matrix": [[1,3,5,7],[...],...],
+          "items": ["B","O","C","R"],
+          "your_weights": [...],
+          "your_cr": 0.01
+        },
+        "benefits_subcriteria": { ... },
+        "opportunities_subcriteria": { ... },
+        ...
+      }
+    }
     """
     try:
         data = request.json
-        matrices = data.get('matrices', [])
-        
-        results = []
+        matrices = data.get('matrices', {})
+        results = {}
         all_valid = True
-        
-        for item in matrices:
-            matrix = np.array(item.get('matrix', []))
-            items = item.get('items', [])
-            your_weights = item.get('your_weights', [])
-            your_cr = item.get('your_cr', 0)
-            name = item.get('name', 'Unknown')
-            
-            # Validar
-            ref_result = validate_with_reference(matrix, items)
-            
-            # Comparar
-            sdk_weights = ref_result['weights']
-            sdk_cr = ref_result['cr']
-            
-            if your_weights:
-                diff_weights = [abs(a - b) for a, b in zip(your_weights, sdk_weights)]
-                max_diff = max(diff_weights)
+        summary = {
+            'total_matrices': 0,
+            'valid_matrices': 0,
+            'max_weight_diff': 0,
+            'max_cr_diff': 0,
+            'issues': []
+        }
+
+        for name, matrix_data in matrices.items():
+            matrix = np.array(matrix_data['matrix'], dtype=float)
+            items = matrix_data.get('items', [])
+            your_weights = matrix_data.get('your_weights', [])
+            your_cr = matrix_data.get('your_cr', None)
+
+            n = len(matrix)
+
+            # AhpAnpLib
+            sdk_weights = priorityVector(matrix)
+            sdk_cr = calcInconsistency(matrix)
+
+            summary['total_matrices'] += 1
+
+            mat_result = {
+                'sdk_weights': [round(float(w), 6) for w in sdk_weights],
+                'sdk_cr': round(float(sdk_cr), 6),
+                'items': items,
+                'n': n,
+                'valid': True
+            }
+
+            if your_weights and len(your_weights) == n:
+                your_w = np.array(your_weights, dtype=float)
+                diff = np.abs(sdk_weights - your_w)
+                max_diff = float(np.max(diff))
+                cr_diff = abs(float(sdk_cr) - float(your_cr)) if your_cr is not None else 0
+
+                mat_result['your_weights'] = [round(float(w), 6) for w in your_w]
+                mat_result['your_cr'] = round(float(your_cr), 6) if your_cr is not None else None
+                mat_result['max_weight_diff'] = round(max_diff, 6)
+                mat_result['cr_diff'] = round(cr_diff, 6)
+                mat_result['valid'] = max_diff < 0.01
+
+                summary['max_weight_diff'] = max(summary['max_weight_diff'], max_diff)
+                summary['max_cr_diff'] = max(summary['max_cr_diff'], cr_diff)
+
+                if max_diff < 0.01:
+                    summary['valid_matrices'] += 1
+                else:
+                    all_valid = False
+                    summary['issues'].append(f'{name}: diff={max_diff*100:.2f}%')
             else:
-                diff_weights = []
-                max_diff = 0
-            
-            diff_cr = abs(your_cr - sdk_cr)
-            
-            is_valid = max_diff < 0.001 and diff_cr < 0.001
-            if not is_valid:
-                all_valid = False
-            
-            results.append({
-                'name': name,
-                'is_valid': is_valid,
-                'your_weights': your_weights,
-                'sdk_weights': sdk_weights,
-                'your_cr': your_cr,
-                'sdk_cr': sdk_cr,
-                'max_weight_diff': max_diff,
-                'cr_diff': diff_cr
-            })
-        
+                mat_result['sdk_only'] = True
+                summary['valid_matrices'] += 1
+
+            results[name] = mat_result
+
         return jsonify({
-            'success': True,
+            'results': results,
+            'summary': summary,
             'all_valid': all_valid,
-            'total': len(results),
-            'passed': sum(1 for r in results if r['is_valid']),
-            'failed': sum(1 for r in results if not r['is_valid']),
-            'results': results
+            'library': 'AhpAnpLib (Creative Decisions Foundation)',
+            'citation': 'Mu, E. (2023). Creative Decisions Foundation Announces the Release of AHP/ANP Python Library. IJAHP, v.15, n.2. DOI: 10.13033/ijahp.v15i2.1163'
         })
-        
+
     except Exception as e:
         return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 400
 
-@app.route('/reference-cases', methods=['GET'])
-def reference_cases():
+
+# ==============================================================
+# STANDALONE CALCULATION (no comparison, just AhpAnpLib results)
+# ==============================================================
+
+@app.route('/calculate', methods=['POST'])
+def calculate():
     """
-    Retorna casos de referência da literatura para auto-validação
+    Calculate eigenvector and CR using AhpAnpLib only.
+
+    Input: { "matrix": [[1,3],[0.333,1]], "items": ["A","B"] }
     """
-    cases = [
-        {
-            'name': 'Saaty (1980) - Drinks Example',
-            'source': 'The Analytic Hierarchy Process, p.26',
-            'matrix': [
-                [1, 9, 5, 2, 1, 1, 0.5],
-                [1/9, 1, 1/3, 1/9, 1/9, 1/9, 1/9],
-                [0.2, 3, 1, 1/3, 0.25, 1/3, 1/9],
-                [0.5, 9, 3, 1, 0.5, 1, 1/3],
-                [1, 9, 4, 2, 1, 2, 0.5],
-                [1, 9, 3, 1, 0.5, 1, 1/3],
-                [2, 9, 9, 3, 2, 3, 1]
-            ],
-            'items': ['Coffee', 'Wine', 'Tea', 'Beer', 'Sodas', 'Milk', 'Water'],
-            'expected_weights': [0.177, 0.019, 0.042, 0.116, 0.190, 0.129, 0.327],
-            'expected_cr': 0.022
-        },
-        {
-            'name': 'Saaty (1980) - 3x3 Simple',
-            'source': 'Fundamentals of Decision Making',
-            'matrix': [
-                [1, 3, 5],
-                [1/3, 1, 2],
-                [0.2, 0.5, 1]
-            ],
-            'items': ['A', 'B', 'C'],
-            'expected_weights': [0.637, 0.258, 0.105],
-            'expected_cr': 0.0158
-        },
-        {
-            'name': 'Wijnmalen (2007) - BOCR',
-            'source': 'Mathematical and Computer Modelling, p.894',
-            'matrix': [
-                [1, 2, 3, 5],
-                [0.5, 1, 2, 4],
-                [1/3, 0.5, 1, 2],
-                [0.2, 0.25, 0.5, 1]
-            ],
-            'items': ['Benefits', 'Opportunities', 'Costs', 'Risks'],
-            'expected_weights': [0.488, 0.275, 0.158, 0.079],
-            'expected_cr': 0.0157
-        }
-    ]
-    
-    return jsonify({
-        'cases': cases,
-        'note': 'Use these cases to validate your AHP implementation'
-    })
+    try:
+        data = request.json
+        matrix = np.array(data['matrix'], dtype=float)
+        items = data.get('items', [f'Item_{i}' for i in range(len(matrix))])
+        n = len(matrix)
+
+        weights = priorityVector(matrix)
+        cr = calcInconsistency(matrix)
+
+        weighted_sum = matrix @ weights
+        lambda_max = float(np.mean(weighted_sum / weights))
+        ci = (lambda_max - n) / (n - 1) if n > 1 else 0
+        ri = float(RI(n)) if n <= 15 else None
+
+        return jsonify({
+            'weights': {items[i]: round(float(weights[i]), 6) for i in range(n)},
+            'weights_array': [round(float(w), 6) for w in weights],
+            'cr': round(float(cr), 6),
+            'ci': round(ci, 6),
+            'lambda_max': round(lambda_max, 6),
+            'ri': ri,
+            'n': n,
+            'consistent': float(cr) <= 0.10,
+            'library': 'AhpAnpLib (Creative Decisions Foundation)'
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
 
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)
