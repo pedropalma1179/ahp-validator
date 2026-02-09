@@ -1,65 +1,36 @@
-# AHP Validator - Validação Externa
+# AHP-BOCR Validator — AhpAnpLib (Creative Decisions Foundation)
+
+Microserviço de validação externa para o sistema AHP-BOCR Decision Support System.  
+Compara os cálculos AHP do sistema com a biblioteca **AhpAnpLib**, publicada pela  
+**Creative Decisions Foundation** (mesma organização do SuperDecisions e do IJAHP).
+
+## Referência Acadêmica
+
+> MU, E. Creative Decisions Foundation Announces the Release of AHP/ANP Python Library.  
+> **International Journal of the Analytic Hierarchy Process**, v. 15, n. 2, 2023.  
+> DOI: [10.13033/ijahp.v15i2.1163](https://doi.org/10.13033/ijahp.v15i2.1163)
 
 ## Arquitetura
 
 ```
-┌─────────────────────────┐     ┌─────────────────────────┐
-│   Next.js (Vercel)      │────▶│  Python (Railway)       │
-│                         │     │                         │
-│  /api/validate-external │     │  Flask + pyAHP          │
-│  Envia matrizes         │◀────│  Retorna validação      │
-└─────────────────────────┘     └─────────────────────────┘
+┌─────────────────────────┐     ┌──────────────────────────────┐
+│   Next.js (Vercel)      │────▶│  Python (Railway)            │
+│                         │     │                              │
+│  /api/validate-external │     │  Flask + AhpAnpLib           │
+│  Envia matrizes         │◀────│  Creative Decisions Found.   │
+└─────────────────────────┘     └──────────────────────────────┘
 ```
 
-## Arquivos Criados
+## Endpoints
 
-1. **ahp-validator/** - Microserviço Python
-   - `app.py` - API Flask com validação AHP
-   - `requirements.txt` - Dependências Python
-   - `Procfile` - Configuração de deploy
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| `GET`  | `/` | Health check — verifica se AhpAnpLib está disponível |
+| `POST` | `/validate` | Valida uma única matriz de comparação pareada |
+| `POST` | `/validate-project` | Valida todas as matrizes de um projeto AHP-BOCR |
+| `POST` | `/calculate` | Calcula eigenvector e CR usando apenas AhpAnpLib |
 
-2. **validate-external-route.ts** - API Next.js
-   - Chama microserviço externo
-   - Fallback local se indisponível
-
-3. **ExternalValidation.tsx** - Componente React
-   - Interface de validação
-   - Tabela comparativa
-
----
-
-## Deploy do Microserviço Python
-
-### Opção 1: Railway (Recomendado - Gratuito)
-
-1. Criar conta em [railway.app](https://railway.app)
-
-2. Criar novo projeto:
-   ```bash
-   # Na pasta ahp-validator
-   railway init
-   railway up
-   ```
-
-3. Copiar URL gerada (ex: `https://ahp-validator-production.up.railway.app`)
-
-4. Configurar variável de ambiente no Vercel:
-   ```
-   AHP_VALIDATOR_URL=https://ahp-validator-production.up.railway.app
-   ```
-
-### Opção 2: Render (Alternativa - Gratuito)
-
-1. Criar conta em [render.com](https://render.com)
-
-2. Criar novo Web Service:
-   - Conectar repositório GitHub
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `gunicorn app:app`
-
-3. Usar URL gerada
-
-### Opção 3: Deploy Local (Desenvolvimento)
+## Instalação Local
 
 ```bash
 cd ahp-validator
@@ -68,150 +39,154 @@ python app.py
 # Servidor em http://localhost:5000
 ```
 
----
+## Deploy no Railway
+
+### Via GitHub (redeploy automático)
+
+1. Fazer push dos arquivos para o repositório GitHub conectado ao Railway
+2. Railway detecta os commits e faz redeploy automaticamente
+3. Acompanhar em [railway.app/dashboard](https://railway.app/dashboard)
+
+### Via CLI
+
+```bash
+railway init
+railway up
+```
+
+### URL atual
+
+```
+https://web-production-49489.up.railway.app
+```
+
+## Testando
+
+### Health check
+
+```bash
+curl https://web-production-49489.up.railway.app/
+```
+
+Resposta esperada:
+
+```json
+{
+  "status": "ok",
+  "service": "AHP-BOCR Validator",
+  "version": "2.0.0",
+  "library": "AhpAnpLib (Creative Decisions Foundation)",
+  "ahpanplib_available": true
+}
+```
+
+### Validar matriz
+
+```bash
+curl -X POST https://web-production-49489.up.railway.app/validate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "matrix": [[1, 3, 5, 7], [0.333, 1, 2, 4], [0.2, 0.5, 1, 2], [0.143, 0.25, 0.5, 1]],
+    "items": ["Benefits", "Opportunities", "Costs", "Risks"],
+    "your_weights": [0.582, 0.231, 0.120, 0.066],
+    "your_cr": 0.011
+  }'
+```
+
+### Validar projeto completo
+
+```bash
+curl -X POST https://web-production-49489.up.railway.app/validate-project \
+  -H "Content-Type: application/json" \
+  -d '{
+    "matrices": {
+      "bocr_merits": {
+        "matrix": [[1,2,3,4],[0.5,1,2,3],[0.333,0.5,1,2],[0.25,0.333,0.5,1]],
+        "items": ["B","O","C","R"],
+        "your_weights": [0.4673, 0.2772, 0.1601, 0.0954],
+        "your_cr": 0.012
+      }
+    }
+  }'
+```
 
 ## Integração no Next.js
 
 ### 1. Copiar arquivos
 
 ```cmd
-REM API de validação
+mkdir C:\AHP-BOCR\ahp-simple\app\api\validate-external
 copy validate-external-route.ts C:\AHP-BOCR\ahp-simple\app\api\validate-external\route.ts
-
-REM Componente React
 copy ExternalValidation.tsx C:\AHP-BOCR\ahp-simple\components\ExternalValidation.tsx
 ```
 
 ### 2. Adicionar no page.tsx (aba Robustez & Validação)
 
-Abra `app/results/[projectId]/page.tsx` e adicione:
-
 ```tsx
-// No topo do arquivo, adicionar import
+// No topo do arquivo
 import ExternalValidation from '@/components/ExternalValidation';
 
-// Na aba "Robustez & Validação", após a seção existente de Validação Cruzada,
-// adicionar o componente:
-
-{/* Validação Externa */}
+// Na aba "Robustez & Validação"
 <ExternalValidation
-  projectId={projectId as string}
-  bocrWeights={calculation.bocrWeights}
-  bocrConsistency={calculation.bocrConsistency}
-  subWeights={calculation.subWeights}
-  subConsistency={calculation.subConsistency}
+  calculation={calculation}
+  project={project}
 />
 ```
 
-### 3. Configurar variável de ambiente
-
-No Vercel Dashboard > Settings > Environment Variables:
+### 3. Variável de ambiente (Vercel)
 
 ```
-AHP_VALIDATOR_URL=https://seu-microservico.railway.app
+AHP_VALIDATOR_URL=https://web-production-49489.up.railway.app
 ```
-
----
-
-## Testando a Validação
-
-### Via API direta:
-
-```bash
-# Health check
-curl https://seu-microservico.railway.app/
-
-# Validar matriz
-curl -X POST https://seu-microservico.railway.app/validate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "matrix": [[1, 3, 5], [0.333, 1, 2], [0.2, 0.5, 1]],
-    "items": ["A", "B", "C"],
-    "your_weights": [0.637, 0.258, 0.105],
-    "your_cr": 0.0158
-  }'
-
-# Casos de referência
-curl https://seu-microservico.railway.app/reference-cases
-```
-
-### Via interface:
-
-1. Acessar resultados do projeto
-2. Ir para aba "Robustez & Validação"
-3. Clicar em "🔍 Executar Validação"
-4. Ver tabela comparativa
-
----
 
 ## O que é validado
 
 | Componente | Método | Tolerância |
 |------------|--------|------------|
-| Eigenvector | Média Geométrica (Saaty, 1980) | < 0.1% |
-| CR | Consistency Ratio | < 0.1% |
+| Eigenvector | Power Method com Harker fix (AhpAnpLib) | < 0.1% |
+| CR | Consistency Ratio (Saaty, 1980) | < 0.1% |
 | λmax | Autovalor máximo | < 0.1% |
-
-### Casos de Referência:
-
-1. **Saaty (1980) - 3x3 Simple**
-   - Matriz clássica de exemplo
-   - Weights: [0.637, 0.258, 0.105]
-   - CR: 1.58%
-
-2. **Wijnmalen (2007) - BOCR**
-   - Matriz BOCR 4x4
-   - Weights: [0.488, 0.275, 0.158, 0.079]
-   - CR: 1.57%
-
-3. **5x5 Subcriteria**
-   - Matriz de subcritérios
-   - Teste de escala maior
-
----
+| RI | Random Index — tabela interna AhpAnpLib | Exato |
 
 ## Citação para Dissertação
 
-> "A implementação AHP foi validada através de comparação com implementação 
-> de referência baseada em Saaty (1980), utilizando o método da média 
-> geométrica para cálculo do eigenvector. A validação foi realizada contra 
-> casos de referência da literatura (Saaty, 1980; Wijnmalen, 2007), 
-> confirmando precisão matemática com diferenças inferiores a 0.1% em 
-> todos os testes executados."
+> "Os cálculos AHP do sistema foram validados contra a biblioteca AhpAnpLib
+> (Creative Decisions Foundation), com diferença máxima de X.XXX% nos vetores
+> de prioridade e X.XXX% nos índices de consistência, atestando a precisão
+> matemática da implementação (MU, 2023; AhpAnpLib v2.3)."
 
-### Referências:
+## Referências
 
-- Saaty, T.L. (1980). The Analytic Hierarchy Process. McGraw-Hill, New York.
-- Saaty, T.L. (2003). Decision-making with the AHP: Why is the principal 
-  eigenvector necessary. European Journal of Operational Research, 145(1), 85-91.
-- Wijnmalen, D.J.D. (2007). Analysis of benefits, opportunities, costs, and 
-  risks (BOCR) with the AHP-ANP. Mathematical and Computer Modelling, 46(7-8), 892-905.
+- MU, E. (2023). Creative Decisions Foundation Announces the Release of AHP/ANP Python Library. *IJAHP*, v. 15, n. 2. DOI: 10.13033/ijahp.v15i2.1163
+- SAATY, T. L. (1980). *The Analytic Hierarchy Process*. McGraw-Hill, New York.
+- WIJNMALEN, D. J. D. (2007). Analysis of benefits, opportunities, costs, and risks (BOCR) with the AHP-ANP. *Mathematical and Computer Modelling*, 46(7-8), 892-905.
 
----
+## Dependências
 
-## Troubleshooting
-
-### Microserviço não responde
-- Verificar se o deploy foi bem sucedido
-- Usar fallback local (já configurado)
-
-### Diferenças acima da tolerância
-- Verificar se a matriz é recíproca
-- Conferir valores de entrada
-- Verificar arredondamentos
-
-### CORS Error
-- O Flask já tem CORS habilitado
-- Verificar URL configurada
-
----
+| Pacote | Versão | Função |
+|--------|--------|--------|
+| AhpAnpLib | ≥ 2.3.17 | Cálculos AHP/ANP — Creative Decisions Foundation |
+| Flask | 3.1.0 | Web framework |
+| flask-cors | 5.0.1 | CORS para chamadas cross-origin |
+| numpy | ≥ 1.24.0 | Computação numérica |
+| gunicorn | 23.0.0 | WSGI server para produção |
 
 ## Custo
 
 | Plataforma | Limite Gratuito | Nota |
 |------------|-----------------|------|
-| Railway | 500h/mês | Ideal para projetos pequenos |
-| Render | 750h/mês | Boa alternativa |
-| Heroku | Não mais gratuito | Evitar |
+| Railway | 500h/mês | Ideal para uso acadêmico |
+| Render | 750h/mês | Alternativa |
 
-Para uso acadêmico, Railway é suficiente (não precisa ficar 24/7 online).
+## Troubleshooting
+
+| Problema | Solução |
+|----------|---------|
+| Microserviço não responde | Verificar deploy no Railway dashboard |
+| `ahpanplib_available: false` | Verificar `requirements.txt` inclui `AhpAnpLib>=2.3.17` |
+| Diferenças acima da tolerância | Verificar reciprocidade da matriz e arredondamentos |
+| CORS error | Flask-CORS já está habilitado; verificar URL no `.env` |
+
+## Licença
+
+Uso acadêmico — Dissertação de Mestrado em Engenharia de Produção, UNESP Guaratinguetá.
