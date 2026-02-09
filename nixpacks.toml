@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["graphviz"]
+
+[variables]
+PYTHON_VERSION = "3.12"
+```
+
+### 2. Criar arquivo `runtime.txt` (novo)
+
+No repositório → **Add file** → **Create new file** → nome: `runtime.txt`
+
+Conteúdo:
+```
+python-3.12.0
